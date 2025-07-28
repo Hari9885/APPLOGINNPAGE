@@ -1,8 +1,8 @@
-// Replace these with your actual Supabase credentials
+// Supabase configuration
 const SUPABASE_URL = "https://rrsgmgedfusqlgknshbl.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJyc2dtZ2VkZnVzcWxna25zaGJsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM2OTYzMTAsImV4cCI6MjA2OTI3MjMxMH0.Zi-3YRo8ViQdGlwE1v1K_ICeKlMUlp4hIMS7FtzFNLM";
 
-// Initialize Supabase client (v2 syntax)
+// Initialize Supabase client
 const { createClient } = supabase;
 const supabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -37,7 +37,7 @@ async function signUp() {
     if (error) {
       alert("Signup Error: " + error.message);
     } else {
-      alert("Check your email for confirmation link!");
+      alert("Signup successful! Check your email for confirmation link.");
       // Clear form
       document.getElementById("signup-email").value = "";
       document.getElementById("signup-password").value = "";
@@ -68,8 +68,8 @@ async function login() {
       // Store user info
       currentUser = data.user;
       
-      // Get user profile to check role
-      await getUserProfile();
+      // Create or get user profile
+      await createOrGetUserProfile();
       
       // Redirect to dashboard
       window.location.href = "dashboard.html";
@@ -142,54 +142,49 @@ async function getCurrentSession() {
   }
 }
 
-async function getUserProfile() {
+async function createOrGetUserProfile() {
   if (!currentUser) return null;
   
   try {
+    // Try to get existing profile
     const { data, error } = await supabaseClient
       .from('profiles')
       .select('*')
       .eq('id', currentUser.id)
       .single();
     
-    if (error) {
-      console.error("Error fetching user profile:", error);
-      // If profile doesn't exist, create one with default role
-      await createUserProfile();
+    if (error && error.code === 'PGRST116') {
+      // Profile doesn't exist, create one
+      const { data: newProfile, error: insertError } = await supabaseClient
+        .from('profiles')
+        .insert([
+          {
+            id: currentUser.id,
+            email: currentUser.email,
+            role: 'user',
+            created_at: new Date().toISOString()
+          }
+        ])
+        .select()
+        .single();
+      
+      if (insertError) {
+        console.error("Error creating profile:", insertError);
+        return null;
+      }
+      
+      userProfile = newProfile;
+      return newProfile;
+    } else if (error) {
+      console.error("Error fetching profile:", error);
       return null;
     }
     
     userProfile = data;
     return data;
   } catch (err) {
-    console.error("Unexpected error fetching profile:", err);
+    console.error("Unexpected error with profile:", err);
     return null;
-  }
-}
-
-async function createUserProfile() {
-  if (!currentUser) return;
-  
-  try {
-    const { data, error } = await supabaseClient
-      .from('profiles')
-      .insert([
-        {
-          id: currentUser.id,
-          email: currentUser.email,
-          role: 'user',
-          created_at: new Date().toISOString()
-        }
-      ]);
-    
-    if (error) {
-      console.error("Error creating user profile:", error);
-    } else {
-      console.log("User profile created successfully");
-      await getUserProfile(); // Refresh profile data
-    }
-  } catch (err) {
-    console.error("Unexpected error creating profile:", err);
   }
 }
 
@@ -215,7 +210,7 @@ async function checkAuthentication() {
   currentUser = session.user;
   
   // Get user profile
-  await getUserProfile();
+  await createOrGetUserProfile();
   
   return true;
 }
@@ -227,7 +222,7 @@ async function checkAdminAccess() {
     return false;
   }
   
-  // Check if user has admin role
+  // Check if user has admin role in the database
   if (!userProfile || userProfile.role !== 'admin') {
     alert("Access denied. Admin privileges required.");
     window.location.href = "dashboard.html";
@@ -278,6 +273,7 @@ async function loadUsers() {
       table.appendChild(row);
     }
   } catch (err) {
+    console.error("Error loading users:", err);
     alert("Error loading users: " + err.message);
   }
 }
@@ -290,8 +286,28 @@ async function showUserInfo() {
         <p><strong>Email:</strong> ${currentUser.email}</p>
         <p><strong>Role:</strong> ${userProfile.role}</p>
         <p><strong>User ID:</strong> ${currentUser.id}</p>
+        <p><strong>Email Confirmed:</strong> ${currentUser.email_confirmed_at ? 'Yes' : 'No'}</p>
+        <p><strong>Profile Created:</strong> ${userProfile.created_at ? new Date(userProfile.created_at).toLocaleDateString() : 'N/A'}</p>
       `;
     }
+  }
+}
+
+// Function to make a user admin (for testing)
+async function makeUserAdmin(email) {
+  try {
+    const { data, error } = await supabaseClient
+      .from('profiles')
+      .update({ role: 'admin' })
+      .eq('email', email);
+    
+    if (error) {
+      console.error("Error making user admin:", error);
+    } else {
+      console.log("User made admin successfully");
+    }
+  } catch (err) {
+    console.error("Error making user admin:", err);
   }
 }
 
@@ -337,12 +353,12 @@ async function initializePage() {
 // AUTH STATE CHANGE LISTENER
 // ===========================================
 
-supabaseClient.auth.onAuthStateChange((event, session) => {
+supabaseClient.auth.onAuthStateChange(async (event, session) => {
   console.log('Auth state changed:', event, session);
   
   if (event === 'SIGNED_IN') {
     currentUser = session.user;
-    getUserProfile();
+    await createOrGetUserProfile();
   } else if (event === 'SIGNED_OUT') {
     currentUser = null;
     userProfile = null;
